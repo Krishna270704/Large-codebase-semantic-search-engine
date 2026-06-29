@@ -17,18 +17,17 @@ services:
 
     # Environment
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.10.14"
-      - key: SSE_OPENAI_API_KEY
-        sync: false   # must be set manually in Render dashboard
-      - key: SSE_OPENAI_BASE_URL
-        sync: false
-      - key: SSE_LLM_MODEL
-        value: gpt-4o-mini
-      - key: SSE_CHROMA_PERSIST_DIR
-        value: /opt/render/project/src/chroma_store
-      - key: SSE_CORS_ORIGINS
-        value: '["https://your-frontend.vercel.app","http://localhost:3000"]'
+  - key: PYTHON_VERSION
+    value: "3.10.14"
+
+  - key: GEMINI_API_KEY
+    sync: false
+
+  - key: SSE_CHROMA_PERSIST_DIR
+    value: /opt/render/project/src/chroma_store
+
+  - key: SSE_CORS_ORIGINS
+    value: '["http://localhost:3000"]'
 
     # Health check
     healthCheckPath: /health

@@ -42,8 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Singleton holders  (populated during lifespan startup)
+# Singleton holders  (populated lazily)
 # ---------------------------------------------------------------------------
+
+import threading
+_lock = threading.Lock()
 
 _embedder = None
 _vector_store = None
@@ -52,41 +55,81 @@ _rag_service = None
 
 
 def get_embedder():
-    """Return the global ``CodeEmbedder`` singleton.
-
-    Raises ``RuntimeError`` if called before startup completes.
-    """
+    """Return the global ``CodeEmbedder`` singleton."""
+    global _embedder
     if _embedder is None:
-        raise RuntimeError("Embedder has not been initialized yet.")
+        with _lock:
+            if _embedder is None:
+                from app.services.embedder import CodeEmbedder
+                settings = get_settings()
+                _embedder = CodeEmbedder(
+                    model_name=settings.embedding_model,
+                    batch_size=settings.embedding_batch_size,
+                )
+                logger.info("Embedder initialized lazily.")
     return _embedder
 
 
-def get_vector_store():
+def get_vectordb():
     """Return the global ``VectorStore`` singleton."""
+    global _vector_store
     if _vector_store is None:
-        raise RuntimeError("VectorStore has not been initialized yet.")
+        with _lock:
+            if _vector_store is None:
+                from app.services.vectordb import VectorStore
+                settings = get_settings()
+                _vector_store = VectorStore(
+                    persist_dir=settings.chroma_persist_dir,
+                    collection_name=settings.chroma_collection,
+                )
+                logger.info("VectorStore initialized lazily.")
     return _vector_store
+
+
+# Alias for backward compatibility if any file calls get_vector_store
+def get_vector_store():
+    return get_vectordb()
 
 
 def get_ingestion_service():
     """Return the global ``IngestionService`` singleton."""
+    global _ingestion_service
     if _ingestion_service is None:
-        raise RuntimeError("IngestionService has not been initialized yet.")
+        with _lock:
+            if _ingestion_service is None:
+                from app.services.ingestion import IngestionService
+                _ingestion_service = IngestionService(
+                    embedder=get_embedder(),
+                    store=get_vectordb(),
+                )
+                logger.info("IngestionService initialized lazily.")
     return _ingestion_service
 
 
-def get_rag_service():
-    """Return the global ``RAGService`` singleton.
-
-    Raises ``RuntimeError`` if the RAG service was not initialized
-    (typically because ``GEMINI_API_KEY`` is not set).
-    """
+def get_rag():
+    """Return the global ``RAGService`` singleton."""
+    global _rag_service
     if _rag_service is None:
-        raise RuntimeError(
-            "RAGService has not been initialized. "
-            "Set GEMINI_API_KEY in your environment or .env file."
-        )
+        with _lock:
+            if _rag_service is None:
+                from app.services.rag import RAGService
+                settings = get_settings()
+                api_key = os.getenv("GEMINI_API_KEY") or settings.gemini_api_key
+                if not api_key:
+                    raise RuntimeError("Gemini API key not configured.")
+                
+                _rag_service = RAGService(
+                    embedder=get_embedder(),
+                    store=get_vectordb(),
+                    top_k=settings.rag_top_k,
+                )
+                logger.info("RAGService initialized lazily.")
     return _rag_service
+
+
+# Alias for backward compatibility if any file calls get_rag_service
+def get_rag_service():
+    return get_rag()
 
 
 # ---------------------------------------------------------------------------
@@ -95,73 +138,20 @@ def get_rag_service():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load expensive resources once at startup; release on shutdown."""
-    global _embedder, _vector_store, _ingestion_service, _rag_service
-
+    """Lifespan context manager. Services are now loaded lazily, so we just log startup/shutdown."""
     settings = get_settings()
-    logger.info("Starting %s v%s ...", settings.app_name, settings.app_version)
-
-    # 1. Load embedding model  (~3-5 s on first run when downloading)
-    from app.services.embedder import CodeEmbedder
-
-    _embedder = CodeEmbedder(
-        model_name=settings.embedding_model,
-        batch_size=settings.embedding_batch_size,
-    )
-    logger.info(
-        "Embedder ready  (model=%s, dim=%d)",
-        settings.embedding_model,
-        _embedder.embedding_dimension,
-    )
-
-    # 2. Initialize persistent vector store
-    from app.services.vectordb import VectorStore
-
-    _vector_store = VectorStore(
-        persist_dir=settings.chroma_persist_dir,
-        collection_name=settings.chroma_collection,
-    )
-    logger.info(
-        "VectorStore ready  (%d documents in '%s')",
-        _vector_store.count,
-        settings.chroma_collection,
-    )
-
-    # 3. Create ingestion service  (shares embedder + store singletons)
-    from app.services.ingestion import IngestionService
-
-    _ingestion_service = IngestionService(
-        embedder=_embedder,
-        store=_vector_store,
-    )
-    logger.info("IngestionService ready")
-
-    # 4. Create RAG service  (requires an LLM API key)
-    api_key = os.getenv("GEMINI_API_KEY") or settings.gemini_api_key
-    logger.info("DEBUG API KEY is: '%s'", api_key)
-
-    if not api_key:
-        raise ValueError("Gemini API key not configured.")
-
-    from app.services.rag import RAGService
-
-    _rag_service = RAGService(
-        embedder=_embedder,
-        store=_vector_store,
-        top_k=settings.rag_top_k,
-    )
-    logger.info("RAGService ready")
-
-    logger.info("=== Startup complete -- all services initialized ===")
+    logger.info("Starting %s v%s ... (lazy loading enabled)", settings.app_name, settings.app_version)
 
     yield  # ---- application serves requests here ----
 
     # Shutdown
     logger.info("Shutting down ...")
+    global _embedder, _vector_store, _ingestion_service, _rag_service
     _embedder = None
     _vector_store = None
     _ingestion_service = None
     _rag_service = None
+
 
 
 # ---------------------------------------------------------------------------

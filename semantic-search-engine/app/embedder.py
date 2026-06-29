@@ -9,8 +9,6 @@ import os
 from typing import List, Optional
 
 import numpy as np
-# pyrefly: ignore [missing-import]
-from sentence_transformers import SentenceTransformer
 
 
 # ---------------------------------------------------------------------------
@@ -47,11 +45,19 @@ class CodeEmbedder:
     ) -> None:
         self.model_name = model_name
         self.batch_size = batch_size
+        self.device = device
+        self._model = None
+        self._embedding_dim = None
 
-        print(f"[Embedder] Loading model '{model_name}' ...")
-        self._model = SentenceTransformer(model_name, device=device)
-        self._embedding_dim = self._model.get_embedding_dimension()
-        print(f"[Embedder] Model loaded -- dimension={self._embedding_dim}")
+    def get_model(self):
+        """Create a singleton get_model() that loads the model only on first use."""
+        if self._model is None:
+            print(f"[Embedder] Loading model '{self.model_name}' ...")
+            from sentence_transformers import SentenceTransformer
+            self._model = SentenceTransformer(self.model_name, device=self.device)
+            self._embedding_dim = self._model.get_embedding_dimension()
+            print(f"[Embedder] Model loaded -- dimension={self._embedding_dim}")
+        return self._model
 
     # ------------------------------------------------------------------
     # Public API
@@ -60,6 +66,8 @@ class CodeEmbedder:
     @property
     def embedding_dimension(self) -> int:
         """Dimensionality of the embedding vectors produced by the model."""
+        if self._embedding_dim is None:
+            self.get_model()
         return self._embedding_dim
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
@@ -78,7 +86,8 @@ class CodeEmbedder:
         if not texts:
             return []
 
-        embeddings = self._model.encode(
+        model = self.get_model()
+        embeddings = model.encode(
             texts,
             batch_size=self.batch_size,
             show_progress_bar=len(texts) > self.batch_size,

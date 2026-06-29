@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
+        "https://large-codebase-semantic-search-engi.vercel.app",
         "https://large-codebase-semantic-search-engine.vercel.app",
         "https://large-codebase-semantic-search-engine-frontend.vercel.app"
     ]

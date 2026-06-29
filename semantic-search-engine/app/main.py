@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 import threading
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 _embedder = None
 _vector_store = None
@@ -175,19 +175,15 @@ app = FastAPI(
 
 # -- CORS -------------------------------------------------------------------
 
-# Ensure required origins are always present along with any from config
-default_origins = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "https://large-codebase-semantic-search-engine.vercel.app"
-]
-combined_origins = list(set(default_origins + settings.cors_origins))
-if "*" in combined_origins:
-    combined_origins.remove("*") # Wildcards not allowed with allow_credentials=True
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=combined_origins,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://large-codebase-semantic-search-engi.vercel.app",
+        "https://large-codebase-semantic-search-engine.vercel.app",
+        "https://large-codebase-semantic-search-engine-frontend.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

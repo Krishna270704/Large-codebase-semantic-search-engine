@@ -75,6 +75,7 @@ def background_ingest(
             github_url=github_url
         )
         logger.info(f"[Ingest] Indexing finished for directory={directory}")
+        logger.info(f"[Ingest] Background task finished for github_url={github_url}, directory={directory}")
     except Exception as e:
         service.state["status"] = "error"
         logger.exception(f"[Ingest] Background ingestion failed: {e}")

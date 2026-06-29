@@ -169,6 +169,7 @@ class IngestionService:
             logger.info("[Ingest] Generating embeddings finished ...")
 
             # 3. Store -----------------------------------------------------------
+            logger.info("[Ingest] Vector DB started ...")
             if reset:
                 logger.info("Resetting collection ...")
                 self._store.reset_collection()
@@ -200,6 +201,7 @@ class IngestionService:
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
+            logger.info("[Ingest] Vector DB finished ...")
             
             self.state["percentage"] = 100
             self.state["status"] = "completed"

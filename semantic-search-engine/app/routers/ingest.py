@@ -30,6 +30,7 @@ def background_ingest(
     data_dir: str
 ):
     try:
+        logger.info(f"[Ingest] Background task started for github_url={github_url}, directory={directory}")
         service.state = {
             "status": "running",
             "files_processed": 0,
@@ -51,16 +52,21 @@ def background_ingest(
             
             if not os.path.exists(target_dir):
                 os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+                logger.info(f"[Ingest] Cloning started for {github_url}")
                 subprocess.run(["git", "clone", github_url, target_dir], check=True, capture_output=True)
+                logger.info(f"[Ingest] Cloning finished for {github_url}")
             else:
                 try:
+                    logger.info(f"[Ingest] Updating existing repo {github_url}")
                     subprocess.run(["git", "pull"], cwd=target_dir, check=True, capture_output=True)
+                    logger.info(f"[Ingest] Pull finished for {github_url}")
                 except Exception:
                     pass
             directory = target_dir
         else:
             directory = os.path.abspath(directory)
             
+        logger.info(f"[Ingest] Indexing started for directory={directory}")
         service.ingest_directory(
             directory=directory,
             chunk_size=chunk_size,
@@ -68,9 +74,10 @@ def background_ingest(
             reset=reset,
             github_url=github_url
         )
+        logger.info(f"[Ingest] Indexing finished for directory={directory}")
     except Exception as e:
         service.state["status"] = "error"
-        logger.exception(f"Background ingestion failed: {e}")
+        logger.exception(f"[Ingest] Background ingestion failed: {e}")
 
 @router.post(
     "/ingest",
@@ -80,6 +87,8 @@ def background_ingest(
 )
 async def ingest_directory_endpoint(body: IngestRequest, background_tasks: BackgroundTasks) -> IngestResponse:
     from app.main import get_ingestion_service
+
+    logger.info(f"[Ingest] Request received: github_url={body.github_url}, directory={body.directory}")
 
     settings = get_settings()
     service = get_ingestion_service()
@@ -110,6 +119,7 @@ async def ingest_directory_endpoint(body: IngestRequest, background_tasks: Backg
         data_dir=settings.data_dir
     )
 
+    logger.info("[Ingest] Response returned: Ingestion started in background.")
     return IngestResponse(
         success=True,
         message="Repository ingestion started."

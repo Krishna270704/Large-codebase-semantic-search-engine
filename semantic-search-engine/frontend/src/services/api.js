@@ -9,9 +9,41 @@ import axios from "axios";
 
 const API = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000",
-  timeout: 60_000, // ingestion can be slow on large repos
+  timeout: 300000, // ingestion can be slow on large repos
   headers: { "Content-Type": "application/json" },
 });
+
+// Interceptors for detailed logging
+API.interceptors.request.use(
+  (config) => {
+    console.log(`[API Request] ${config.method.toUpperCase()} ${config.url}`);
+    if (config.data) {
+      console.log(`[API Request Body]`, config.data);
+    }
+    return config;
+  },
+  (error) => {
+    console.error(`[API Request Error]`, error);
+    return Promise.reject(error);
+  }
+);
+
+API.interceptors.response.use(
+  (response) => {
+    console.log(`[API Response] ${response.status} from ${response.config.url}`);
+    console.log(`[API Response Data]`, response.data);
+    return response;
+  },
+  (error) => {
+    if (error.response) {
+      console.error(`[API Error Response] ${error.response.status} from ${error.config?.url}`);
+      console.error(`[API Error Data]`, error.response.data);
+    } else {
+      console.error(`[API Error]`, error.message);
+    }
+    return Promise.reject(error);
+  }
+);
 
 /* ── Search ────────────────────────────────────────────────────── */
 

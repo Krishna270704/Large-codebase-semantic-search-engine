@@ -25,7 +25,12 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # -- CORS ---------------------------------------------------------------
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://large-codebase-semantic-search-engine.vercel.app",
+        "https://large-codebase-semantic-search-engine-frontend.vercel.app"
+    ]
 
     # -- Embedding model ----------------------------------------------------
     embedding_model: str = "all-MiniLM-L6-v2"

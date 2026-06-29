@@ -62,19 +62,24 @@ class VectorStore:
     ) -> None:
         self.persist_dir = os.path.abspath(persist_dir)
         self.collection_name = collection_name
+        self._client = None
+        self._collection_instance = None
 
-        os.makedirs(self.persist_dir, exist_ok=True)
-
-        print(f"[VectorStore] Initializing ChromaDB at '{self.persist_dir}' ...")
-        self._client = chromadb.PersistentClient(path=self.persist_dir)
-        self._collection = self._client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-        print(
-            f"[VectorStore] Collection '{self.collection_name}' ready -- "
-            f"{self._collection.count()} existing documents"
-        )
+    def _get_collection(self):
+        """Lazily initialize ChromaDB client and collection."""
+        if self._collection_instance is None:
+            os.makedirs(self.persist_dir, exist_ok=True)
+            print(f"[VectorStore] Initializing ChromaDB at '{self.persist_dir}' ...")
+            self._client = chromadb.PersistentClient(path=self.persist_dir)
+            self._collection_instance = self._client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+            print(
+                f"[VectorStore] Collection '{self.collection_name}' ready -- "
+                f"{self._collection_instance.count()} existing documents"
+            )
+        return self._collection_instance
 
     # ------------------------------------------------------------------
     # Public API
@@ -107,7 +112,7 @@ class VectorStore:
         batch_size = 500
         for i in range(0, len(ids), batch_size):
             end = i + batch_size
-            self._collection.upsert(
+            self._get_collection().upsert(
                 ids=ids[i:end],
                 documents=documents[i:end],
                 embeddings=embeddings[i:end],
@@ -140,13 +145,13 @@ class VectorStore:
         """
         query_kwargs = {
             "query_embeddings": [query_embedding],
-            "n_results": min(top_k, self._collection.count()),
+            "n_results": min(top_k, self._get_collection().count()),
             "include": ["documents", "metadatas", "distances"],
         }
         if where:
             query_kwargs["where"] = where
 
-        results = self._collection.query(**query_kwargs)
+        results = self._get_collection().query(**query_kwargs)
 
         hits: List[SearchResult] = []
         if not results["documents"] or not results["documents"][0]:
@@ -176,8 +181,14 @@ class VectorStore:
 
     def reset_collection(self) -> None:
         """Delete and recreate the collection (useful for re-ingestion)."""
-        self._client.delete_collection(self.collection_name)
-        self._collection = self._client.get_or_create_collection(
+        if self._client:
+            self._client.delete_collection(self.collection_name)
+        else:
+            # Force init client if it wasn't
+            self._get_collection()
+            self._client.delete_collection(self.collection_name)
+            
+        self._collection_instance = self._client.get_or_create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
@@ -186,4 +197,4 @@ class VectorStore:
     @property
     def count(self) -> int:
         """Number of documents currently stored."""
-        return self._collection.count()
+        return self._get_collection().count()

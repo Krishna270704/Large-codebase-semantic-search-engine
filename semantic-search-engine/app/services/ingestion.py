@@ -150,7 +150,7 @@ class IngestionService:
                 return IngestionResult(0, 0, round(time.perf_counter() - t0, 2), self._store.count, [])
 
             # 2. Embed -----------------------------------------------------------
-            logger.info("Generating embeddings ...")
+            logger.info("[Ingest] Generating embeddings started ...")
             texts = [c.text for c in chunks]
             
             # Since embedding can be slow, we'll embed in batches to update progress
@@ -166,6 +166,7 @@ class IngestionService:
                 # The next 40% of progress is embedding
                 chunks_processed = min(i + batch_size, total_chunks)
                 self.state["percentage"] = 50 + int((chunks_processed / total_chunks) * 40)
+            logger.info("[Ingest] Generating embeddings finished ...")
 
             # 3. Store -----------------------------------------------------------
             if reset:

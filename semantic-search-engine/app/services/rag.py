@@ -17,8 +17,7 @@ import os
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Dict, List, Optional
 
-# pyrefly: ignore [missing-import]
-import google.generativeai as genai
+# (old google.generativeai removed)
 
 from app.services.embedder import CodeEmbedder
 from app.services.vectordb import SearchResult, VectorStore
@@ -40,15 +39,19 @@ NO_CONTEXT_ANSWER = (
 
 import asyncio
 import time
-
-# Configure Gemini
 from google import genai
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("Gemini API key not configured.")
+# Lazy initialization of Gemini client
+_client = None
 
-client = genai.Client(api_key=api_key)
+def get_genai_client():
+    global _client
+    if _client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("Gemini API key not configured.")
+        _client = genai.Client(api_key=api_key)
+    return _client
 
 class RAGException(Exception):
     def __init__(self, message, sources=None):
@@ -226,7 +229,9 @@ Select the most relevant chunks (up to 5). Return ONLY a JSON array of objects w
 Do not return markdown formatting (no ```json), just the raw JSON array.
 """
         try:
-            response = await client.aio.models.generate_content(
+            logger.info(f"Calling Gemini ({self._model}) for reranking {len(unique_hits)} chunks...")
+            start_t = time.time()
+            response = await get_genai_client().aio.models.generate_content(
                 model=self._model,
                 contents=prompt,
             )
@@ -256,7 +261,7 @@ Do not return markdown formatting (no ```json), just the raw JSON array.
                             repository_name=self._get_active_repo_name(),
                         )
                     )
-            logger.info(f"LLM Reranker selected {len(reranked_sources)} chunks out of {len(unique_hits)}.")
+            logger.info(f"LLM Reranker selected {len(reranked_sources)} chunks out of {len(unique_hits)}. (Latency: {time.time() - start_t:.2f}s)")
             return reranked_sources
         except Exception as e:
             logger.warning(f"Reranking failed: {e}. Falling back to top 5.")
@@ -290,12 +295,14 @@ Latest question: {question}
 
 Standalone query:"""
         try:
-            response = await client.aio.models.generate_content(
+            logger.info(f"Calling Gemini ({self._model}) to rewrite query based on history...")
+            start_t = time.time()
+            response = await get_genai_client().aio.models.generate_content(
                 model=self._model,
                 contents=prompt,
             )
             rewritten = response.text.strip()
-            logger.info(f"Rewrote query: '{question}' -> '{rewritten}'")
+            logger.info(f"Rewrote query: '{question}' -> '{rewritten}' (Latency: {time.time() - start_t:.2f}s)")
             return rewritten
         except Exception as e:
             logger.warning(f"Failed to rewrite query: {e}")
@@ -305,12 +312,14 @@ Standalone query:"""
         history_text = "\n".join([f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}" for msg in history])
         prompt = f"Summarize the following conversation concisely, focusing on the main technical points discussed. This will be used as context for the AI. \n\n{history_text}\n\nSummary:"
         try:
-            response = await client.aio.models.generate_content(
+            logger.info(f"Calling Gemini ({self._model}) to summarize history...")
+            start_t = time.time()
+            response = await get_genai_client().aio.models.generate_content(
                 model=self._model,
                 contents=prompt,
             )
             summary = response.text.strip()
-            logger.info("Automatically summarized long conversation.")
+            logger.info(f"Automatically summarized long conversation. (Latency: {time.time() - start_t:.2f}s)")
             return summary
         except Exception as e:
             logger.warning(f"Failed to summarize history: {e}")
@@ -383,7 +392,7 @@ Standalone query:"""
         start_time = time.time()
         for attempt in range(retries + 1):
             try:
-                response = await client.aio.models.generate_content(
+                response = await get_genai_client().aio.models.generate_content(
                     model=self._model,
                     contents=prompt,
                 )
@@ -414,129 +423,139 @@ Standalone query:"""
         question: str,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncIterator[str]:
-        logger.info(f"User question: {question}")
-        
-        search_query = question
-        history_context = ""
-        
-        if history:
-            search_query = await self._rewrite_query(question, history)
+        try:
+            logger.info(f"User question: {question}")
             
-            if len(history) > 6:
-                summary = await self._summarize_history(history)
-                history_context = f"\nConversation Summary:\n{summary}\n"
-            else:
-                history_context = "\nHistory:\n" + "\n".join([f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}" for msg in history]) + "\n"
+            search_query = question
+            history_context = ""
+            
+            if history:
+                search_query = await self._rewrite_query(question, history)
+                
+                if len(history) > 6:
+                    summary = await self._summarize_history(history)
+                    history_context = f"\nConversation Summary:\n{summary}\n"
+                else:
+                    history_context = "\nHistory:\n" + "\n".join([f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}" for msg in history]) + "\n"
 
-        hits = self._retrieve(search_query)
-        
-        for i, h in enumerate(hits):
-            logger.info(f"Retrieved chunk {i+1}: {h.file_path} - Score: {h.score:.4f}")
+            hits = self._retrieve(search_query)
+            
+            for i, h in enumerate(hits):
+                logger.info(f"Retrieved chunk {i+1}: {h.file_path} - Score: {h.score:.4f}")
 
-        if not hits:
-            sources_payload = {"type": "sources", "sources": []}
-            yield f"data: {json.dumps(sources_payload)}\n\n"
+            if not hits:
+                sources_payload = {"type": "sources", "sources": []}
+                yield f"data: {json.dumps(sources_payload)}\n\n"
+                
+                no_ctx = {"type": "token", "content": NO_CONTEXT_ANSWER}
+                yield f"data: {json.dumps(no_ctx)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': self._model})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+                
+            if hits[0].score < 0.2:
+                sources = self._hits_to_sources(hits)
+                sources_payload = {
+                    "type": "sources",
+                    "sources": [
+                        {
+                            "file_path": s.file_path,
+                            "start_line": s.start_line,
+                            "end_line": s.end_line,
+                            "language": s.language,
+                            "score": s.score,
+                            "snippet": s.snippet,
+                        }
+                        for s in sources
+                    ],
+                }
+                yield f"data: {json.dumps(sources_payload)}\n\n"
+                msg = {"type": "token", "content": "The indexed repository does not appear to contain enough information to answer this question."}
+                yield f"data: {json.dumps(msg)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': self._model})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+                
+            # Reranking step: Deduplicate and select top chunks with reasons using LLM
+            sources = await self._rerank_and_explain(search_query, hits)
             
-            no_ctx = {"type": "token", "content": NO_CONTEXT_ANSWER}
-            yield f"data: {json.dumps(no_ctx)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'model': self._model})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-            
-        if hits[0].score < 0.2:
-            sources = self._hits_to_sources(hits)
+            logger.info(f"Retrieved chunk count (post-rerank): {len(sources)}")
+
             sources_payload = {
                 "type": "sources",
                 "sources": [
                     {
                         "file_path": s.file_path,
+                        "relative_path": s.relative_path,
                         "start_line": s.start_line,
                         "end_line": s.end_line,
                         "language": s.language,
                         "score": s.score,
                         "snippet": s.snippet,
+                        "reason": s.reason,
+                        "repository_name": s.repository_name,
                     }
                     for s in sources
                 ],
             }
             yield f"data: {json.dumps(sources_payload)}\n\n"
-            msg = {"type": "token", "content": "The indexed repository does not appear to contain enough information to answer this question."}
-            yield f"data: {json.dumps(msg)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'model': self._model})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
+
+            context_blocks = []
+            for i, s in enumerate(sources, 1):
+                header = f"[File: {s.file_path} | Lines: {s.start_line}–{s.end_line}]"
+                context_blocks.append(f"{header}\n```{s.language}\n{s.snippet}\n```")
+            context = "\n\n".join(context_blocks)
             
-        # Reranking step: Deduplicate and select top chunks with reasons using LLM
-        sources = await self._rerank_and_explain(search_query, hits)
-        
-        logger.info(f"Retrieved chunk count (post-rerank): {len(sources)}")
-
-        sources_payload = {
-            "type": "sources",
-            "sources": [
-                {
-                    "file_path": s.file_path,
-                    "relative_path": s.relative_path,
-                    "start_line": s.start_line,
-                    "end_line": s.end_line,
-                    "language": s.language,
-                    "score": s.score,
-                    "snippet": s.snippet,
-                    "reason": s.reason,
-                    "repository_name": s.repository_name,
-                }
-                for s in sources
-            ],
-        }
-        yield f"data: {json.dumps(sources_payload)}\n\n"
-
-        context_blocks = []
-        for i, s in enumerate(sources, 1):
-            header = f"[File: {s.file_path} | Lines: {s.start_line}–{s.end_line}]"
-            context_blocks.append(f"{header}\n```{s.language}\n{s.snippet}\n```")
-        context = "\n\n".join(context_blocks)
-        
-        prompt = self._build_prompt(question, context, history_context)
-        
-        logger.info(f"Final prompt sent to Gemini:\n{prompt}")
-        logger.info(f"Prompt length: {len(prompt)} characters")
-        logger.info(f"Selected model: {self._model}")
-        
-        retries = 3
-        backoff = [2, 4, 8]
-        
-        start_time = time.time()
-        for attempt in range(retries + 1):
-            try:
-                # Using generate_content async/streaming
-                response = await client.aio.models.generate_content_stream(
-                    model=self._model,
-                    contents=prompt,
-                )
-                async for chunk in response:
-                    if chunk.text:
-                        token_event = {"type": "token", "content": chunk.text}
-                        yield f"data: {json.dumps(token_event)}\n\n"
-                
-                logger.info(f"Final status: success after {attempt} retries")
-                break
-            except Exception as exc:
-                if attempt < retries and is_retryable_error(exc):
-                    logger.warning(f"Retryable error: {exc}. Retry attempts: {attempt + 1}. Retrying in {backoff[attempt]} seconds...")
-                    await asyncio.sleep(backoff[attempt])
-                else:
-                    latency = time.time() - start_time
-                    logger.error(f"LLM streaming failed. Final status: error. Gemini latency: {latency:.2f}s")
-                    error_event = {
-                        "type": "error",
-                        "content": f"The AI service is temporarily busy. Please try again in a few seconds.",
-                    }
-                    yield f"data: {json.dumps(error_event)}\n\n"
+            prompt = self._build_prompt(question, context, history_context)
+            
+            logger.info(f"Final prompt sent to Gemini:\n{prompt}")
+            logger.info(f"Prompt length: {len(prompt)} characters")
+            logger.info(f"Selected model: {self._model}")
+            
+            retries = 3
+            backoff = [2, 4, 8]
+            
+            start_time = time.time()
+            for attempt in range(retries + 1):
+                try:
+                    # Using generate_content async/streaming
+                    response = await get_genai_client().aio.models.generate_content_stream(
+                        model=self._model,
+                        contents=prompt,
+                    )
+                    async for chunk in response:
+                        if chunk.text:
+                            token_event = {"type": "token", "content": chunk.text}
+                            yield f"data: {json.dumps(token_event)}\n\n"
+                    
+                    logger.info(f"Final status: success after {attempt} retries")
                     break
-        
-        latency = time.time() - start_time
-        logger.info(f"Gemini latency: {latency:.2f}s")
+                except Exception as exc:
+                    if attempt < retries and is_retryable_error(exc):
+                        logger.warning(f"Retryable error: {exc}. Retry attempts: {attempt + 1}. Retrying in {backoff[attempt]} seconds...")
+                        await asyncio.sleep(backoff[attempt])
+                    else:
+                        latency = time.time() - start_time
+                        logger.error(f"LLM streaming failed. Final status: error. Gemini latency: {latency:.2f}s")
+                        error_event = {
+                            "type": "error",
+                            "content": f"The AI service is temporarily busy. Please try again in a few seconds.",
+                        }
+                        yield f"data: {json.dumps(error_event)}\n\n"
+                        break
+            
+            latency = time.time() - start_time
+            logger.info(f"Gemini latency: {latency:.2f}s")
 
-        done_event = {"type": "done", "model": self._model}
-        yield f"data: {json.dumps(done_event)}\n\n"
-        yield "data: [DONE]\n\n"
+            done_event = {"type": "done", "model": self._model}
+            yield f"data: {json.dumps(done_event)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.exception("Global exception during RAG stream processing")
+            # If an exception is raised before headers are sent, yield will force a 200 OK + this error chunk
+            error_event = {
+                "type": "error",
+                "content": f"An unexpected error occurred during processing: {str(e)}"
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+            yield "data: [DONE]\n\n"

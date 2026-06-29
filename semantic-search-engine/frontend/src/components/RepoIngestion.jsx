@@ -44,7 +44,7 @@ export default function RepoIngestion() {
             message: "Ingestion completed successfully.",
             files_processed: stat.files_processed
           });
-        } else if (stat.status === "error") {
+        } else if (stat.status === "error" || stat.status === "failed") {
           clearInterval(pollInterval.current);
           setLoading(false);
           toast.error("Ingestion failed.");

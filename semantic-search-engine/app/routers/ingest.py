@@ -52,9 +52,9 @@ def background_ingest(
             
             if not os.path.exists(target_dir):
                 os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-                logger.info(f"[Ingest] Cloning started for {github_url}")
+                logger.info(f"[Ingest] Git clone started for {github_url}")
                 subprocess.run(["git", "clone", github_url, target_dir], check=True, capture_output=True)
-                logger.info(f"[Ingest] Cloning finished for {github_url}")
+                logger.info(f"[Ingest] Git clone finished for {github_url}")
             else:
                 try:
                     logger.info(f"[Ingest] Updating existing repo {github_url}")
@@ -67,6 +67,7 @@ def background_ingest(
             directory = os.path.abspath(directory)
             
         logger.info(f"[Ingest] Indexing started for directory={directory}")
+        
         service.ingest_directory(
             directory=directory,
             chunk_size=chunk_size,
@@ -74,10 +75,11 @@ def background_ingest(
             reset=reset,
             github_url=github_url
         )
+        
         logger.info(f"[Ingest] Indexing finished for directory={directory}")
-        logger.info(f"[Ingest] Background task finished for github_url={github_url}, directory={directory}")
+        logger.info(f"[Ingest] Status updated to completed")
     except Exception as e:
-        service.state["status"] = "error"
+        service.state["status"] = "failed"
         logger.exception(f"[Ingest] Background ingestion failed: {e}")
 
 @router.post(
@@ -86,7 +88,10 @@ def background_ingest(
     status_code=status.HTTP_200_OK,
     summary="Ingest code files asynchronously",
 )
-async def ingest_directory_endpoint(body: IngestRequest, background_tasks: BackgroundTasks) -> IngestResponse:
+async def ingest_directory_endpoint(
+    body: IngestRequest,
+    background_tasks: BackgroundTasks,
+) -> IngestResponse:
     from app.main import get_ingestion_service
 
     logger.info(f"[Ingest] Request received: github_url={body.github_url}, directory={body.directory}")

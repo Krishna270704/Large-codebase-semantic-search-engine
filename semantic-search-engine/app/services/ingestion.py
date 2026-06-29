@@ -252,6 +252,6 @@ class IngestionService:
                 files=files_list,
             )
         except Exception as e:
-            self.state["status"] = "error"
+            self.state["status"] = "failed"
             logger.exception("Ingestion failed in background task")
             raise e

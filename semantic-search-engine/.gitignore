@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+*.env
+
+# Logs
+*.log
+
+# Database
+chroma_store/
+
+# Node
+node_modules/
+
+# Build
+dist/
+build/

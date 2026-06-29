@@ -1,0 +1,73 @@
+# =============================================================================
+# Docker Compose — Semantic Code Search Engine (Full Stack)
+# =============================================================================
+#
+# Usage:
+#   docker-compose up --build          # Build & start all services
+#   docker-compose up -d               # Start in background
+#   docker-compose down                # Stop all services
+#   docker-compose down -v             # Stop & remove volumes
+#   docker-compose logs -f backend     # Tail backend logs
+#
+# =============================================================================
+
+services:
+  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sse-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - SSE_OPENAI_API_KEY=${SSE_OPENAI_API_KEY:-}
+      - SSE_OPENAI_BASE_URL=${SSE_OPENAI_BASE_URL:-}
+      - SSE_LLM_MODEL=${SSE_LLM_MODEL:-gpt-4o-mini}
+      - SSE_LLM_TEMPERATURE=${SSE_LLM_TEMPERATURE:-0.1}
+      - SSE_LLM_MAX_TOKENS=${SSE_LLM_MAX_TOKENS:-1024}
+      - SSE_RAG_TOP_K=${SSE_RAG_TOP_K:-5}
+      - SSE_CHROMA_PERSIST_DIR=/app/chroma_store
+      - SSE_CORS_ORIGINS=["http://localhost:3000","http://localhost","http://frontend:80"]
+      - SSE_EMBEDDING_MODEL=${SSE_EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+    volumes:
+      - chroma_data:/app/chroma_store
+      - model_cache:/home/appuser/.cache
+    networks:
+      - sse-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  # ── Frontend (React + Nginx) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+    container_name: sse-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - sse-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  chroma_data:
+    driver: local
+  model_cache:
+    driver: local
+
+# ── Network ──────────────────────────────────────────────────────────────────
+networks:
+  sse-network:
+    driver: bridge

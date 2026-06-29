@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# Docker
+docker-compose*.yml
+
+# Frontend (built separately)
+frontend/
+
+# ChromaDB local store (will be mounted as volume)
+chroma_store/
+
+# Misc
+*.log
+*.md
+!README.md

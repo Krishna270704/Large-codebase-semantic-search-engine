@@ -1,0 +1,43 @@
+# =============================================================================
+# Render Blueprint — render.yaml
+# =============================================================================
+# Auto-deploy configuration for render.com
+# Docs: https://docs.render.com/blueprint-spec
+# =============================================================================
+
+services:
+  - type: web
+    name: semantic-search-api
+    runtime: python
+    region: oregon
+
+    # Build
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    # Environment
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10.14"
+      - key: SSE_OPENAI_API_KEY
+        sync: false   # must be set manually in Render dashboard
+      - key: SSE_OPENAI_BASE_URL
+        sync: false
+      - key: SSE_LLM_MODEL
+        value: gpt-4o-mini
+      - key: SSE_CHROMA_PERSIST_DIR
+        value: /opt/render/project/src/chroma_store
+      - key: SSE_CORS_ORIGINS
+        value: '["https://your-frontend.vercel.app","http://localhost:3000"]'
+
+    # Health check
+    healthCheckPath: /health
+
+    # Plan
+    plan: starter   # or free (with limitations)
+
+    # Disk for ChromaDB persistence
+    disk:
+      name: chroma-storage
+      mountPath: /opt/render/project/src/chroma_store
+      sizeGB: 1

@@ -79,8 +79,14 @@ def background_ingest(
         logger.info(f"[Ingest] Indexing finished for directory={directory}")
         logger.info(f"[Ingest] Status updated to completed")
     except Exception as e:
-        service.state["status"] = "failed"
-        logger.exception(f"[Ingest] Background ingestion failed: {e}")
+        service.state = {
+        "status": "failed",
+        "files_processed": 0,
+        "total_files": 0,
+        "percentage": 0,
+        "error": str(e)
+    }
+    logger.exception(f"[Ingest] Background ingestion failed: {e}")
 
 @router.post(
     "/ingest",

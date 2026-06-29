@@ -107,14 +107,17 @@ class IngestionService:
             "total_files": 0,
             "percentage": 0
         }
-
+        
         # 1. Chunk -----------------------------------------------------------
         logger.info("Chunking files in '%s' ...", directory)
         chunker = CodeChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         
         try:
+            logger.info("STEP 1 -> discover_files started")
             files = chunker.discover_files(directory)
+            logger.info(f"STEP 1 DONE -> Found {len(files)} files")
             total_files = len(files)
+
             self.state["total_files"] = total_files
             
             if total_files == 0:
@@ -130,6 +133,7 @@ class IngestionService:
                 self.state["files_processed"] = files_processed
                 # The first 50% of progress is chunking files
                 self.state["percentage"] = int((files_processed / total_files) * 50)
+                logger.info(f"STEP 2 DONE -> Chunking completed. Total chunks = {len(chunks)}")
 
             # Calculate relative display paths
             def get_display_path(abs_path: str) -> str:
@@ -147,23 +151,27 @@ class IngestionService:
                 return IngestionResult(0, 0, round(time.perf_counter() - t0, 2), self._store.count, [])
 
             # 2. Embed -----------------------------------------------------------
+            logger.info("STEP 3 -> Embedding started")
             logger.info("[Ingest] Generating embeddings started ...")
             texts = [c.text for c in chunks]
             
             # Since embedding can be slow, we'll embed in batches to update progress
             embeddings = []
-            batch_size = 64
+            batch_size = 8
             total_chunks = len(texts)
             
             for i in range(0, total_chunks, batch_size):
                 batch_texts = texts[i:i+batch_size]
+                logger.info(f"[DEBUG] Embedding batch {i} to {i + len(batch_texts)}")
                 batch_embeddings = self._embedder.embed_texts(batch_texts)
+                logger.info(f"[DEBUG] Embedding batch completed {i}")
                 embeddings.extend(batch_embeddings)
                 
                 # The next 40% of progress is embedding
                 chunks_processed = min(i + batch_size, total_chunks)
                 self.state["percentage"] = 50 + int((chunks_processed / total_chunks) * 40)
             logger.info("[Ingest] Generating embeddings finished ...")
+            logger.info("STEP 3 DONE -> Embedding completed")
 
             # 3. Store -----------------------------------------------------------
             logger.info("[Ingest] Vector DB started ...")
@@ -191,17 +199,23 @@ class IngestionService:
             # We can upsert all at once, Chroma batching takes care of it, but let's update progress
             # The last 10% is storing
             self.state["percentage"] = 95
-            
+
+            logger.info("[DEBUG] Starting Chroma upsert")
+            logger.info("STEP 4 -> Chroma upsert started")
             self._store.upsert(
                 ids=ids,
                 documents=texts,
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
+            logger.info("[DEBUG] Chroma upsert completed")
+
             logger.info("[Ingest] Vector DB finished ...")
+            logger.info("STEP 4 DONE -> Chroma upsert completed")
             
             self.state["percentage"] = 100
             self.state["status"] = "completed"
+            logger.info("STEP 5 -> Ingestion COMPLETED")
 
             elapsed = round(time.perf_counter() - t0, 2)
             logger.info("Ingestion complete: %d chunks in %.2fs", len(chunks), elapsed)

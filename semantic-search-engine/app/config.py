@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # -- RAG / LLM ----------------------------------------------------------
     gemini_api_key: Optional[str] = None
-    llm_model: str = "gemini-2.5-flash"
+    llm_model: str = "gemini-1.5-flash"
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
     rag_top_k: int = 10

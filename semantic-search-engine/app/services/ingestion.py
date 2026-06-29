@@ -134,9 +134,6 @@ class IngestionService:
             # Calculate relative display paths
             def get_display_path(abs_path: str) -> str:
                 try:
-                    if f"data{os.sep}github{os.sep}" in directory:
-                        parent = os.path.dirname(directory)
-                        return os.path.relpath(abs_path, parent).replace(os.sep, "/")
                     return os.path.relpath(abs_path, directory).replace(os.sep, "/")
                 except ValueError:
                     return abs_path

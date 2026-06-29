@@ -191,7 +191,7 @@ Code:
             
             try:
                 response = await client.aio.models.generate_content_stream(
-                    model="gemini-2.5-flash",
+                    model="gemini-1.5-flash",
                     contents=prompt,
                 )
                 async for chunk in response:
@@ -212,7 +212,7 @@ Code:
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         try:
             response = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-1.5-flash",
                 contents=prompt,
             )
             from fastapi.responses import JSONResponse

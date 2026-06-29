@@ -21,6 +21,7 @@ export default function RepoIngestion() {
   });
   
   const pollInterval = useRef(null);
+  const idleCountRef = useRef(0);
 
   const startPolling = () => {
     if (pollInterval.current) clearInterval(pollInterval.current);
@@ -49,6 +50,18 @@ export default function RepoIngestion() {
           setLoading(false);
           toast.error("Ingestion failed.");
           setError("An error occurred during ingestion. Please check the backend logs.");
+        } else if (stat.status === "idle") {
+          // If we receive 'idle' while polling, the backend might have crashed and restarted
+          idleCountRef.current = (idleCountRef.current || 0) + 1;
+          if (idleCountRef.current > 3) {
+            clearInterval(pollInterval.current);
+            setLoading(false);
+            toast.error("Ingestion terminated unexpectedly.");
+            setError("The backend worker may have crashed (e.g., Out Of Memory). Please check Render logs.");
+          }
+        } else {
+          // Reset idle count if running
+          idleCountRef.current = 0;
         }
       } catch (err) {
         console.error("Polling error:", err);

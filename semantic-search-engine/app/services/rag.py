@@ -86,7 +86,7 @@ class RAGResult:
     question: str
     answer: str
     sources: List[RAGSource] = field(default_factory=list)
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-1.5-flash"
     tokens_used: int = 0
 
 
@@ -105,7 +105,7 @@ class RAGService:
         self._embedder = embedder
         self._store = store
         self._top_k = top_k
-        self._model = "gemini-2.5-flash"
+        self._model = "gemini-1.5-flash"
         self._active_repo = ""
         logger.info("RAGService ready (model=%s, top_k=%d)", self._model, top_k)
 

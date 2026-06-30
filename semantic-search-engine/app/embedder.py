@@ -31,10 +31,18 @@ class RateLimiter:
         self.max_calls = max_calls
         self.period = period
         self.calls = deque()
+        self.min_interval = period / max_calls  # Pacing between calls
 
     def wait(self):
         now = time.time()
-        # Remove calls older than the period
+        
+        # Enforce pacing between any two calls
+        if self.calls:
+            elapsed = now - self.calls[-1]
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+                now = time.time()
+
         while self.calls and now - self.calls[0] > self.period:
             self.calls.popleft()
         
@@ -42,7 +50,6 @@ class RateLimiter:
             sleep_time = self.period - (now - self.calls[0])
             if sleep_time > 0:
                 time.sleep(sleep_time)
-            # Remove again after sleeping
             now = time.time()
             while self.calls and now - self.calls[0] > self.period:
                 self.calls.popleft()
@@ -146,11 +153,17 @@ class CodeEmbedder:
                             raise
                         
                         sleep_time = 2 ** attempt
-                        match = re.search(r'"retryDelay":\s*"(\d+)s"', str(e))
-                        if match:
-                            sleep_time = int(match.group(1)) + 1
+                        
+                        err_str = str(e)
+                        match_msg = re.search(r"Please retry in ([\d\.]+)s", err_str)
+                        match_delay = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+)s['\"]", err_str)
+                        
+                        if match_msg:
+                            sleep_time = float(match_msg.group(1)) + 1.0
+                        elif match_delay:
+                            sleep_time = float(match_delay.group(1)) + 1.0
                             
-                        print(f"[Embedder] 429 Rate limit hit, retrying attempt {attempt}/6 (sleep {sleep_time}s)...")
+                        print(f"[Embedder] 429 Rate limit hit, retrying attempt {attempt}/6 (sleep {sleep_time:.2f}s)...")
                         time.sleep(sleep_time)
                     else:
                         raise

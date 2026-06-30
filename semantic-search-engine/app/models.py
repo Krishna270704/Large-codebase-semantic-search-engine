@@ -57,6 +57,7 @@ class IngestStatusResponse(BaseModel):
     files_processed: int = 0
     total_files: int = 0
     percentage: int = 0
+    error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

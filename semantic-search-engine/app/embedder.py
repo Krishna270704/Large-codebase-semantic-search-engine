@@ -49,8 +49,6 @@ class RateLimiter:
         
         self.calls.append(time.time())
 
-# Global rate limiter (90 calls per minute)
-_rate_limiter = RateLimiter(max_calls=90, period=60.0)
 
 
 # ---------------------------------------------------------------------------
@@ -66,17 +64,21 @@ class CodeEmbedder:
         Gemini model identifier (default ``gemini-embedding-001``).
     batch_size : int
         Number of texts to encode in a single API call (default 100).
+    max_requests_per_minute : int
+        Maximum number of API requests per minute (default 80).
     """
 
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        max_requests_per_minute: int = 80,
     ) -> None:
         self.model_name = model_name
         self.batch_size = batch_size
         self._client = None
         self._embedding_dim = 768
+        self._rate_limiter = RateLimiter(max_calls=max_requests_per_minute, period=60.0)
 
     def get_client(self):
         """Create a singleton get_client() that loads the client only on first use."""
@@ -117,14 +119,15 @@ class CodeEmbedder:
         if not texts:
             return []
 
+        import re
         client = self.get_client()
         embeddings = []
         
         for i in range(0, len(texts), self.batch_size):
             batch_texts = texts[i:i + self.batch_size]
             
-            for attempt in range(1, 6):
-                _rate_limiter.wait()
+            for attempt in range(1, 7):
+                self._rate_limiter.wait()
                 try:
                     response = client.models.embed_content(
                         model=self.model_name,
@@ -139,10 +142,16 @@ class CodeEmbedder:
                     break
                 except ClientError as e:
                     if hasattr(e, "code") and e.code == 429 or "429" in str(e):
-                        if attempt == 5:
+                        if attempt == 6:
                             raise
-                        print(f"[Embedder] 429 Rate limit hit, retrying attempt {attempt}/5 with exponential backoff...")
-                        time.sleep(2 ** attempt)
+                        
+                        sleep_time = 2 ** attempt
+                        match = re.search(r'"retryDelay":\s*"(\d+)s"', str(e))
+                        if match:
+                            sleep_time = int(match.group(1)) + 1
+                            
+                        print(f"[Embedder] 429 Rate limit hit, retrying attempt {attempt}/6 (sleep {sleep_time}s)...")
+                        time.sleep(sleep_time)
                     else:
                         raise
 

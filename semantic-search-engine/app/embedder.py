@@ -15,8 +15,8 @@ import numpy as np
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
-DEFAULT_BATCH_SIZE = 64
+DEFAULT_MODEL_NAME = "paraphrase-MiniLM-L3-v2"
+DEFAULT_BATCH_SIZE = 8
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +89,8 @@ class CodeEmbedder:
         model = self.get_model()
         embeddings = model.encode(
             texts,
-            batch_size=self.batch_size,
-            show_progress_bar=len(texts) > self.batch_size,
+            batch_size=8,
+            show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=True,   # unit-norm → cosine ≡ dot product
         )

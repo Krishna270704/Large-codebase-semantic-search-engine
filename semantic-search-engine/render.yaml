@@ -33,7 +33,7 @@ services:
     healthCheckPath: /health
 
     # Plan
-    plan: starter   # or free (with limitations)
+    plan: free
 
     # Disk for ChromaDB persistence
     disk:

@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     ]
 
     # -- Embedding model ----------------------------------------------------
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_batch_size: int = 64
+    embedding_model: str = "gemini-embedding-001"
+    embedding_batch_size: int = 100
 
     # -- ChromaDB -----------------------------------------------------------
     chroma_persist_dir: str = os.path.join(

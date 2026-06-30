@@ -37,6 +37,8 @@ def background_ingest(
             "total_files": 0,
             "percentage": 0
         }
+        if hasattr(service, "_save_state"):
+            service._save_state()
         
         if github_url:
             import subprocess
@@ -80,13 +82,15 @@ def background_ingest(
         logger.info(f"[Ingest] Status updated to completed")
     except Exception as e:
         service.state = {
-        "status": "failed",
-        "files_processed": 0,
-        "total_files": 0,
-        "percentage": 0,
-        "error": str(e)
-    }
-    logger.exception(f"[Ingest] Background ingestion failed: {e}")
+            "status": "failed",
+            "files_processed": 0,
+            "total_files": 0,
+            "percentage": 0,
+            "error": str(e)
+        }
+        if hasattr(service, "_save_state"):
+            service._save_state()
+        logger.exception(f"[Ingest] Background ingestion failed: {e}")
 
 @router.post(
     "/ingest",

@@ -1,22 +1,22 @@
 """
-embedder.py — Embedding logic using sentence-transformers.
+embedder.py — Embedding logic using Google Gemini.
 
-Wraps the ``all-MiniLM-L6-v2`` model for converting text chunks
+Wraps the ``text-embedding-004`` model for converting text chunks
 into dense vector embeddings suitable for semantic similarity search.
 """
 
 import os
-from typing import List, Optional
+from typing import List
 
-import numpy as np
-
+from google import genai
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_NAME = "paraphrase-MiniLM-L3-v2"
-DEFAULT_BATCH_SIZE = 8
+DEFAULT_MODEL_NAME = "gemini-embedding-001"
+DEFAULT_BATCH_SIZE = 100
 
 
 # ---------------------------------------------------------------------------
@@ -29,35 +29,32 @@ class CodeEmbedder:
     Parameters
     ----------
     model_name : str
-        Hugging Face model identifier (default ``all-MiniLM-L6-v2``).
+        Gemini model identifier (default ``text-embedding-004``).
     batch_size : int
-        Number of texts to encode in a single forward pass (default 64).
-    device : str | None
-        Torch device string (``"cpu"``, ``"cuda"``, etc.).
-        If *None*, sentence-transformers will auto-detect.
+        Number of texts to encode in a single API call (default 100).
     """
 
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL_NAME,
         batch_size: int = DEFAULT_BATCH_SIZE,
-        device: Optional[str] = None,
     ) -> None:
         self.model_name = model_name
         self.batch_size = batch_size
-        self.device = device
-        self._model = None
-        self._embedding_dim = None
+        self._client = None
+        self._embedding_dim = 768
 
-    def get_model(self):
-        """Create a singleton get_model() that loads the model only on first use."""
-        if self._model is None:
-            print(f"[Embedder] Loading model '{self.model_name}' ...")
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name, device=self.device)
-            self._embedding_dim = self._model.get_embedding_dimension()
+    def get_client(self):
+        """Create a singleton get_client() that loads the client only on first use."""
+        if self._client is None:
+            print(f"[Embedder] Loading Gemini model '{self.model_name}' ...")
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                from app.config import get_settings
+                api_key = get_settings().gemini_api_key
+            self._client = genai.Client(api_key=api_key)
             print(f"[Embedder] Model loaded -- dimension={self._embedding_dim}")
-        return self._model
+        return self._client
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,8 +63,6 @@ class CodeEmbedder:
     @property
     def embedding_dimension(self) -> int:
         """Dimensionality of the embedding vectors produced by the model."""
-        if self._embedding_dim is None:
-            self.get_model()
         return self._embedding_dim
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
@@ -86,22 +81,23 @@ class CodeEmbedder:
         if not texts:
             return []
 
-        model = self.get_model()
-        embeddings = model.encode(
-            texts,
-            batch_size=8,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,   # unit-norm → cosine ≡ dot product
-        )
+        client = self.get_client()
+        embeddings = []
+        
+        for i in range(0, len(texts), self.batch_size):
+            batch_texts = texts[i:i + self.batch_size]
+            response = client.models.embed_content(
+                model=self.model_name,
+                contents=batch_texts,
+                config=types.EmbedContentConfig(
+                    output_dimensionality=self._embedding_dim
+                )
+            )
+            for e in response.embeddings:
+                embeddings.append(e.values)
 
-        # Convert numpy arrays → plain Python lists (required by ChromaDB)
-        return embeddings.tolist()
+        return embeddings
 
     def embed_query(self, query: str) -> List[float]:
-        """Embed a single search query string.
-
-        This is a convenience wrapper around :meth:`embed_texts` for a
-        single input.
-        """
+        """Embed a single search query string."""
         return self.embed_texts([query])[0]

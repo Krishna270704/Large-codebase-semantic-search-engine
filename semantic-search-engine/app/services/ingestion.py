@@ -10,8 +10,9 @@ Used by both the ``POST /api/v1/ingest`` endpoint and the CLI script.
 import logging
 import os
 import time
+import json
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from app.services.chunker import CodeChunker
 from app.services.embedder import CodeEmbedder
@@ -40,29 +41,40 @@ class IngestionResult:
 # ---------------------------------------------------------------------------
 
 class IngestionService:
-    """Orchestrates the full ingestion pipeline.
-
-    Designed to be instantiated **once** at app startup and reused across
-    requests.  The expensive ``CodeEmbedder`` and ``VectorStore`` singletons
-    are injected so they can be shared with the search endpoint.
-
-    Parameters
-    ----------
-    embedder : CodeEmbedder
-        Pre-loaded embedding model (shared singleton).
-    store : VectorStore
-        Pre-initialized vector store (shared singleton).
-    """
-
     def __init__(self, embedder: CodeEmbedder, store: VectorStore) -> None:
         self._embedder = embedder
         self._store = store
-        self.state = {
+        self.state_file = os.path.join(self._store.persist_dir, "job_state.json")
+        
+        # Load and clean up stale state
+        self.state = self._load_state()
+        if self.state.get("status") == "running":
+            # If we restart and find a running state, it means the worker crashed
+            self.state["status"] = "failed"
+            self.state["error"] = "Ingestion interrupted (worker crashed or restarted)"
+            self._save_state()
+
+    def _load_state(self) -> Dict[str, Any]:
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {
             "status": "idle",
             "files_processed": 0,
             "total_files": 0,
             "percentage": 0
         }
+
+    def _save_state(self):
+        try:
+            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            with open(self.state_file, "w") as f:
+                json.dump(self.state, f)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
 
     def get_status(self) -> dict:
         return self.state
@@ -76,154 +88,118 @@ class IngestionService:
         reset: bool = False,
         github_url: Optional[str] = None,
     ) -> IngestionResult:
-        """Run the full ingestion pipeline on *directory*.
-
-        Parameters
-        ----------
-        directory : str
-            Root path to scan for source files.
-        chunk_size : int
-            Target tokens per chunk.
-        chunk_overlap : int
-            Overlap tokens between adjacent chunks.
-        reset : bool
-            If ``True``, wipe the collection before storing.
-
-        Returns
-        -------
-        IngestionResult
-
-        Raises
-        ------
-        FileNotFoundError
-            If *directory* does not exist.
-        ValueError
-            If *chunk_overlap* >= *chunk_size*.
-        """
         t0 = time.perf_counter()
+        
         self.state = {
             "status": "running",
             "files_processed": 0,
             "total_files": 0,
             "percentage": 0
         }
-        
-        # 1. Chunk -----------------------------------------------------------
-        logger.info("Chunking files in '%s' ...", directory)
-        chunker = CodeChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        self._save_state()
         
         try:
-            logger.info("STEP 1 -> discover_files started")
+            logger.info("Discovering files in '%s' ...", directory)
+            chunker = CodeChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             files = chunker.discover_files(directory)
-            logger.info(f"STEP 1 DONE -> Found {len(files)} files")
             total_files = len(files)
-
+            
             self.state["total_files"] = total_files
+            self._save_state()
             
             if total_files == 0:
                 self.state["status"] = "completed"
                 self.state["percentage"] = 100
+                self._save_state()
                 return IngestionResult(0, 0, 0.0, self._store.count, [])
 
-            chunks = []
-            files_processed = 0
-            for fp in files:
-                chunks.extend(chunker.chunk_file(fp))
-                files_processed += 1
-                self.state["files_processed"] = files_processed
-                # The first 50% of progress is chunking files
-                self.state["percentage"] = int((files_processed / total_files) * 50)
-                logger.info(f"STEP 2 DONE -> Chunking completed. Total chunks = {len(chunks)}")
+            if reset:
+                logger.info("Resetting collection ...")
+                self._store.reset_collection()
+                
+            repo_name = os.path.basename(os.path.abspath(directory).rstrip(os.sep))
+            active_repo_file = os.path.join(self._store.persist_dir, "active_repo.txt")
+            os.makedirs(os.path.dirname(active_repo_file), exist_ok=True)
+            with open(active_repo_file, "w") as f:
+                f.write(repo_name)
 
-            # Calculate relative display paths
             def get_display_path(abs_path: str) -> str:
                 try:
                     return os.path.relpath(abs_path, directory).replace(os.sep, "/")
                 except ValueError:
                     return abs_path
 
-            files_list = list({get_display_path(c.file_path) for c in chunks})
-            logger.info("Produced %d chunks from %d files", len(chunks), files_processed)
-
-            if not chunks:
-                self.state["status"] = "completed"
-                self.state["percentage"] = 100
-                return IngestionResult(0, 0, round(time.perf_counter() - t0, 2), self._store.count, [])
-
-            # 2. Embed -----------------------------------------------------------
-            logger.info("STEP 3 -> Embedding started")
-            logger.info("[Ingest] Generating embeddings started ...")
-            texts = [c.text for c in chunks]
+            # Stream processing: process files in small batches to bound memory
+            file_batch_size = 20
+            total_chunks_processed = 0
+            files_processed = 0
+            all_chunks_info = []  # Light metadata for stats.json
+            files_list = set()
             
-            # Since embedding can be slow, we'll embed in batches to update progress
-            embeddings = []
-            batch_size = 8
-            total_chunks = len(texts)
-            
-            for i in range(0, total_chunks, batch_size):
-                batch_texts = texts[i:i+batch_size]
-                logger.info(f"[DEBUG] Embedding batch {i} to {i + len(batch_texts)}")
-                batch_embeddings = self._embedder.embed_texts(batch_texts)
-                logger.info(f"[DEBUG] Embedding batch completed {i}")
-                embeddings.extend(batch_embeddings)
+            for i in range(0, total_files, file_batch_size):
+                file_batch = files[i:i + file_batch_size]
                 
-                # The next 40% of progress is embedding
-                chunks_processed = min(i + batch_size, total_chunks)
-                self.state["percentage"] = 50 + int((chunks_processed / total_chunks) * 40)
-            logger.info("[Ingest] Generating embeddings finished ...")
-            logger.info("STEP 3 DONE -> Embedding completed")
+                # 1. Chunk batch
+                batch_chunks = []
+                for fp in file_batch:
+                    batch_chunks.extend(chunker.chunk_file(fp))
+                    files_list.add(get_display_path(fp))
+                
+                if not batch_chunks:
+                    files_processed += len(file_batch)
+                    self.state["files_processed"] = files_processed
+                    self.state["percentage"] = int((files_processed / total_files) * 95)
+                    self._save_state()
+                    continue
+                
+                # 2. Embed batch
+                texts = [c.text for c in batch_chunks]
+                embeddings = self._embedder.embed_texts(texts)
+                
+                # 3. Store batch
+                ids = [f"{get_display_path(c.file_path)}::{c.start_line}-{c.end_line}" for c in batch_chunks]
+                metadatas = [
+                    {
+                        "file_path": get_display_path(c.file_path),
+                        "start_line": c.start_line,
+                        "end_line": c.end_line,
+                        "language": c.language,
+                        "repository": repo_name,
+                    }
+                    for c in batch_chunks
+                ]
+                
+                self._store.upsert(
+                    ids=ids,
+                    documents=texts,
+                    embeddings=embeddings,
+                    metadatas=metadatas,
+                )
+                
+                # Collect lightweight stats
+                for c in batch_chunks:
+                    all_chunks_info.append(c.language)
+                
+                total_chunks_processed += len(batch_chunks)
+                files_processed += len(file_batch)
+                
+                # Update progress (0-95% during processing)
+                self.state["files_processed"] = files_processed
+                self.state["percentage"] = int((files_processed / total_files) * 95)
+                self._save_state()
+                
+                logger.info(f"Processed batch {i} to {i + len(file_batch)} ({files_processed}/{total_files} files)")
 
-            # 3. Store -----------------------------------------------------------
-            logger.info("[Ingest] Vector DB started ...")
-            if reset:
-                logger.info("Resetting collection ...")
-                self._store.reset_collection()
-
-            repo_name = os.path.basename(os.path.abspath(directory).rstrip(os.sep))
-            active_repo_file = os.path.join(self._store.persist_dir, "active_repo.txt")
-            with open(active_repo_file, "w") as f:
-                f.write(repo_name)
-
-            ids = [f"{get_display_path(c.file_path)}::{c.start_line}-{c.end_line}" for c in chunks]
-            metadatas = [
-                {
-                    "file_path": get_display_path(c.file_path),
-                    "start_line": c.start_line,
-                    "end_line": c.end_line,
-                    "language": c.language,
-                    "repository": repo_name,
-                }
-                for c in chunks
-            ]
-
-            # We can upsert all at once, Chroma batching takes care of it, but let's update progress
-            # The last 10% is storing
-            self.state["percentage"] = 95
-
-            logger.info("[DEBUG] Starting Chroma upsert")
-            logger.info("STEP 4 -> Chroma upsert started")
-            self._store.upsert(
-                ids=ids,
-                documents=texts,
-                embeddings=embeddings,
-                metadatas=metadatas,
-            )
-            logger.info("[DEBUG] Chroma upsert completed")
-
-            logger.info("[Ingest] Vector DB finished ...")
-            logger.info("STEP 4 DONE -> Chroma upsert completed")
-            
             self.state["percentage"] = 100
             self.state["status"] = "completed"
-            logger.info("STEP 5 -> Ingestion COMPLETED")
+            self._save_state()
 
             elapsed = round(time.perf_counter() - t0, 2)
-            logger.info("Ingestion complete: %d chunks in %.2fs", len(chunks), elapsed)
+            logger.info("Ingestion complete: %d chunks in %.2fs", total_chunks_processed, elapsed)
 
             # Generate stats.json
-            import json
             from collections import defaultdict
-            
+            files_list = list(files_list)
             folder_sizes = defaultdict(int)
             for fp in files_list:
                 folder = os.path.dirname(fp)
@@ -232,8 +208,8 @@ class IngestionService:
             largest_folders = sorted([{"name": k, "count": v} for k, v in folder_sizes.items()], key=lambda x: x["count"], reverse=True)[:5]
             
             languages_count = defaultdict(int)
-            for c in chunks:
-                languages_count[c.language] += 1
+            for lang in all_chunks_info:
+                languages_count[lang] += 1
             languages = sorted([{"name": k, "count": v} for k, v in languages_count.items()], key=lambda x: x["count"], reverse=True)
             
             folder_count = len(set(os.path.dirname(fp) for fp in files_list if os.path.dirname(fp)))
@@ -244,7 +220,7 @@ class IngestionService:
                 "root_path": os.path.abspath(directory),
                 "languages": languages,
                 "file_count": files_processed,
-                "chunk_count": len(chunks),
+                "chunk_count": total_chunks_processed,
                 "folder_count": folder_count,
                 "last_indexed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "largest_folders": largest_folders,
@@ -256,7 +232,7 @@ class IngestionService:
                 json.dump(stats, f)
 
             return IngestionResult(
-                chunks_indexed=len(chunks),
+                chunks_indexed=total_chunks_processed,
                 files_processed=files_processed,
                 elapsed_seconds=elapsed,
                 total_stored=self._store.count,
@@ -264,5 +240,7 @@ class IngestionService:
             )
         except Exception as e:
             self.state["status"] = "failed"
+            self.state["error"] = str(e)
+            self._save_state()
             logger.exception("Ingestion failed in background task")
             raise e
